@@ -13,13 +13,14 @@ Usage:
 import argparse
 import json
 import sys
-import time
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
-
+import psycopg2
 import numpy as np
 import pandas as pd
+import mlflow
 
 from src.evaluation.evaluator_standalone import StandalonePipelineEvaluator
 from src.ingestion.data_validator_standalone import RuleSeverity, StandaloneDataValidator
@@ -32,11 +33,38 @@ from src.store.feature_store import FeatureStore
 from src.training.distributed_trainer_standalone import StandaloneDistributedTrainer
 from src.training.model_selector_standalone import StandaloneModelSelector
 from src.utils.logger import get_logger
+from src.integration.jira_client import JiraCloudClient
 
 logger = get_logger(__name__)
 
 FEATURE_STORE_PATH = "./demo_feature_store"
 RESULTS_DIR = "./demo_results"
+
+
+def save_metrics_to_postgres(model_name: str, run_id: str, metrics: Dict[str, float]) -> None:
+    """Сохранить метрики модели в PostgreSQL"""
+    try:
+        conn = psycopg2.connect(
+            host=os.getenv("POSTGRES_HOST", "postgres"),
+            port=os.getenv("POSTGRES_PORT", "5432"),
+            dbname=os.getenv("POSTGRES_DB", "ml_pipeline"),
+            user=os.getenv("POSTGRES_USER", "pipeline_user"),
+            password=os.getenv("POSTGRES_PASSWORD", "pipeline_pass")
+        )
+        cursor = conn.cursor()
+
+        for metric_name, metric_value in metrics.items():
+            cursor.execute("""
+                INSERT INTO model_metrics (model_name, run_id, metric_name, metric_value, created_at)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (model_name, run_id, metric_name, metric_value, datetime.now()))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+        logger.info(f"Metrics saved to PostgreSQL for {model_name}")
+    except Exception as e:
+        logger.error(f"Failed to save metrics to PostgreSQL: {e}")
 
 
 def run_fraud_detection_pipeline(
@@ -46,24 +74,18 @@ def run_fraud_detection_pipeline(
 ) -> Dict[str, Any]:
     """
     Run the full fraud detection ML pipeline.
-
-    Demonstrates all pipeline stages: data ingestion, validation,
-    processing, feature engineering, feature store management,
-    distributed model training, evaluation, and model selection.
-
-    Args:
-        num_samples: Number of transaction samples to generate.
-        num_batches: Number of streaming batches to simulate.
-        seed: Random seed for reproducibility.
-
-    Returns:
-        Pipeline results dictionary.
     """
     monitor = PipelineMonitor(pipeline_name="fraud-detection-pipeline")
     orchestrator = MLPipelineOrchestrator(
         pipeline_name="fraud-detection-pipeline",
         fail_fast=True,
     )
+
+    # Setup MLflow
+    mlflow_tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
+    mlflow.set_tracking_uri(mlflow_tracking_uri)
+    mlflow.set_experiment("spark-ml-training")
+    logger.info(f"MLflow tracking URI: {mlflow.get_tracking_uri()}")
 
     Path(RESULTS_DIR).mkdir(parents=True, exist_ok=True)
 
@@ -72,8 +94,12 @@ def run_fraud_detection_pipeline(
     # ----------------------------------------------------------------
     def ingest_data(ctx: Dict[str, Any]) -> pd.DataFrame:
         logger.info("=" * 70)
-        logger.info("STAGE 1: DATA INGESTION (Kafka Consumer Simulation)")
+        logger.info("STAGE 1: DATA INGESTION (Kafka Producer)")
         logger.info("=" * 70)
+
+        from src.ingestion.kafka_producer import RealKafkaProducer
+
+        producer = RealKafkaProducer(bootstrap_servers="kafka:29092")
 
         simulator = KafkaConsumerSimulator(
             topic="fraud-transactions",
@@ -84,11 +110,16 @@ def run_fraud_detection_pipeline(
         )
 
         all_batches = []
-        for batch in simulator.generate_stream(
+        for batch_df in simulator.generate_stream(
             num_batches=num_batches,
-            delay_seconds=0.0,
+            delay_seconds=0.5,
         ):
-            all_batches.append(batch)
+            # Отправляем каждую транзакцию в Kafka
+            for _, row in batch_df.iterrows():
+                producer.send_transaction("fraud-transactions", row.to_dict())
+            all_batches.append(batch_df)
+
+        producer.close()
 
         df = pd.concat(all_batches, ignore_index=True)
 
@@ -290,9 +321,16 @@ def run_fraud_detection_pipeline(
             use_grid_search=False,
         )
 
+        # Log to MLflow and monitor
         for r in results:
             monitor.record_model_metric(r.algorithm, "f1", r.metrics.get("f1", 0))
             monitor.record_model_metric(r.algorithm, "accuracy", r.metrics.get("accuracy", 0))
+
+            # MLflow logging for each model
+            with mlflow.start_run(run_name=r.algorithm):
+                mlflow.log_params(r.best_params)
+                mlflow.log_metrics(r.metrics)
+                logger.info(f"MLflow run logged for {r.algorithm}")
 
         return {
             "training_results": results,
@@ -378,11 +416,32 @@ def run_fraud_detection_pipeline(
 
         summary = selector.generate_report_summary(report)
 
+        # Сохраняем метрики всех моделей в PostgreSQL
+        for result in results:
+            save_metrics_to_postgres(
+                model_name=result.algorithm,
+                run_id=result.model.uid if hasattr(result.model, 'uid') else 'unknown',
+                metrics=result.metrics
+            )
+
+        # Сохраняем победителя
+        save_metrics_to_postgres(
+            model_name=summary['winner_algorithm'],
+            run_id='best_model_' + summary['winner_algorithm'],
+            metrics={'f1': summary['winner_metric']}
+        )
+
         logger.info(
             f"Model selected | winner={summary['winner_algorithm']} "
             f"| f1={summary['winner_metric']:.4f} "
             f"| threshold_met={summary['threshold_met']}"
         )
+
+        # Log best model to MLflow
+        with mlflow.start_run(run_name=f"best_model_{summary['winner_algorithm']}", nested=True):
+            mlflow.log_metrics({"best_f1": summary['winner_metric']})
+            mlflow.log_param("best_algorithm", summary['winner_algorithm'])
+            mlflow.log_param("best_algorithm_rank", 1)
 
         summary_path = Path(RESULTS_DIR) / "selection_report.json"
         with open(summary_path, "w", encoding="utf-8") as f:

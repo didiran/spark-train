@@ -1,0 +1,11 @@
+# kibana/config/kibana.yml
+server.name: kibana
+server.host: "0"
+elasticsearch.hosts: ["http://elasticsearch:9200"]
+monitoring.ui.container.elasticsearch.enabled: true
+
+# Автоматическое создание data view
+kibana.index: ".kibana"
+
+# Настройки для импорта
+xpack.savedObjects.import.enabled: true

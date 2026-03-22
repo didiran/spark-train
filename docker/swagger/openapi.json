@@ -1,0 +1,44 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "ML Training Pipeline API",
+    "version": "1.0.0",
+    "description": "REST API for ML Training Pipeline"
+  },
+  "servers": [
+    {"url": "http://localhost:5000", "description": "MLflow"},
+    {"url": "http://localhost:8080", "description": "Spark Master"},
+    {"url": "http://localhost:8081", "description": "Schema Registry"},
+    {"url": "http://localhost:8085", "description": "AKHQ API"}
+  ],
+  "paths": {
+    "/api/2.0/mlflow/experiments/list": {
+      "get": {
+        "summary": "List MLflow experiments",
+        "responses": {"200": {"description": "OK"}}
+      }
+    },
+    "/subjects": {
+      "get": {
+        "summary": "List Schema Registry subjects",
+        "responses": {"200": {"description": "OK"}}
+      },
+      "post": {
+        "summary": "Register new schema",
+        "responses": {"200": {"description": "Created"}}
+      }
+    },
+    "/json/": {
+      "get": {
+        "summary": "Spark Master metrics",
+        "responses": {"200": {"description": "OK"}}
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "Health check",
+        "responses": {"200": {"description": "OK"}}
+      }
+    }
+  }
+}

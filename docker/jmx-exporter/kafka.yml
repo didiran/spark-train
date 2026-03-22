@@ -1,0 +1,18 @@
+---
+startDelaySeconds: 0
+hostPort: kafka:5555
+username:
+password:
+ssl: false
+lowercaseOutputName: false
+lowercaseOutputLabelNames: false
+rules:
+  - pattern: kafka.server<type=BrokerTopicMetrics, name=(.+)><>(Count|OneMinuteRate)
+    name: kafka_server_$1_$2
+    type: GAUGE
+  - pattern: kafka.controller<type=KafkaController, name=(.+)><>Value
+    name: kafka_controller_$1
+    type: GAUGE
+  - pattern: kafka.log<type=Log, name=(.+)><>Value
+    name: kafka_log_$1
+    type: GAUGE

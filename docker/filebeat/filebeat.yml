@@ -1,0 +1,18 @@
+filebeat.inputs:
+- type: container
+  paths:
+    - '/var/lib/docker/containers/*/*.log'
+  processors:
+    - add_docker_metadata: ~
+
+# Для Windows нужно добавить настройку пути к сокету
+output.elasticsearch:
+  hosts: ['elasticsearch:9200']
+  indices:
+    - index: "pipeline-logs-%{+yyyy.MM.dd}"
+
+setup.template.name: "pipeline-logs"
+setup.template.pattern: "pipeline-logs-*"
+
+logging.level: info
+logging.to_files: false

@@ -1,0 +1,15 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "ML Pipeline PostgreSQL",
+      "Group": "ML Training",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "ml_pipeline",
+      "Username": "pipeline_user",
+      "Password": "pipeline_pass",
+      "SSLMode": "prefer",
+      "ConnectNow": true
+    }
+  }
+}
